@@ -122,6 +122,13 @@ def forecast_case(case: dict) -> dict:
     h_target = max(h_last + 0.5, target_h)
     dlog = math.log(h_target / h_last)
 
+    # Only the launch-night page so far (a few hundred review / early-access accounts holding nearly everything):
+    # Exophase's first refresh adds the launch's real players, nearly all holding only the first trophy, so every
+    # rate below 100% is diluted. Forecast the launch-night count over a grown player base, skewed up for the real
+    # players who earn the early trophies.
+    if n_last <= LAUNCH_NIGHT_MAX_PLAYERS:
+        return launch_night_forecast(trophies, last)
+
     def rate_at(read, i):
         rates = read["rates"]
         if i >= len(rates):
@@ -304,6 +311,31 @@ def main() -> None:
             print(f"{path.name}: model failed ({exc!r}); falling back to a wide persistence band", file=sys.stderr)
             forecast = fallback(case)
         (OUTPUT_DIR / f"{path.stem}.out").write_text(json.dumps(forecast, separators=(",", ":")) + "\n", encoding="utf-8")
+
+
+# Launch-night dilution: median growth of players tracked at the first refresh, and its logit-scale spread.
+LAUNCH_GROWTH = 5.5
+LAUNCH_SD_LO = 0.35
+LAUNCH_SD_HI = 0.55
+
+
+def launch_night_forecast(trophies, last) -> dict:
+    rows = []
+    for i, t in enumerate(trophies):
+        rates = last["rates"]
+        r = rates[i] if i < len(rates) and rates[i] is not None else 0.0
+        if r >= 99.95:
+            rows.append({"id": t["id"], "q": [99.9, 99.98, 100, 100, 100]})
+            continue
+        if r <= 0.0:
+            rows.append({"id": t["id"], "q": [0.0, 0.0, 0.01, 0.01, 0.03]})
+            continue
+        m = logit_raw(r / LAUNCH_GROWTH)
+        q = [round(expit_pct(m + z * (LAUNCH_SD_HI if z > 0 else LAUNCH_SD_LO)), 4) for z in Z]
+        for j in range(1, 5):
+            q[j] = max(q[j], q[j - 1])
+        rows.append({"id": t["id"], "q": q})
+    return {"trophies": rows}
 
 
 def fallback(case: dict) -> dict:
