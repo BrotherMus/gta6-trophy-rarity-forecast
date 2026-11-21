@@ -40,8 +40,8 @@ LAUNCH = datetime(2026, 11, 19, 0, 0, tzinfo=timezone.utc)
 LAUNCH_NIGHT_MAX_PLAYERS = 2000
 # Real holders below this are too few to fit a trend on (Exophase prints 2 decimals: 0.01% of 50k is 5 players).
 MIN_FIT_COUNT = 15
-# Fit window, in hours before the last refresh.
-WINDOW_HOURS = 36.0
+# Fit window, in hours before the last refresh (recency half-weight at half of it).
+WINDOW_HOURS = 30.0
 # Extrapolated log-time trends overshoot over a long horizon; keep this share of the fitted slope.
 DAMP = 0.85
 # Players-tracked growth: share of the fitted log-log slope kept, and its bounds.
@@ -146,13 +146,16 @@ def forecast_case(case: dict) -> dict:
 
     # Refreshes from the post-launch-night page on. Exophase may refresh only a few times a day, so keep every one,
     # weighted toward the recent ones (half weight WINDOW_HOURS before the last refresh).
-    recent = [
-        r for r in reads
-        if r["players_tracked"] > LAUNCH_NIGHT_MAX_PLAYERS and hours_since_launch(r["at"]) >= 2.0
-    ]
+    # The first hours after launch are a ramp (everyone just started) whose log-time slope is far steeper than the
+    # trend that carries on, and ln(hours) gives those early points huge leverage: fit the last WINDOW_HOURS, from
+    # hour 8 on, and widen only when Exophase refreshed too rarely to leave three distinct pages there.
+    post = [r for r in reads if r["players_tracked"] > LAUNCH_NIGHT_MAX_PLAYERS and hours_since_launch(r["at"]) >= 2.0]
+    recent = [r for r in post if hours_since_launch(r["at"]) >= max(8.0, h_last - WINDOW_HOURS)]
+    if len(recent) < 3:
+        recent = [r for r in post if hours_since_launch(r["at"]) >= 6.0] or post
 
     def recency(r):
-        return 0.5 ** ((h_last - hours_since_launch(r["at"])) / WINDOW_HOURS)
+        return 0.5 ** ((h_last - hours_since_launch(r["at"])) / (WINDOW_HOURS / 2.0))
 
     # 2. Players tracked at the target: log-log trend of the recent refreshes.
     n_slope = N_SLOPE_DEFAULT
